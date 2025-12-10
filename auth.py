@@ -18,7 +18,7 @@ class AuthHandler:
             
             # Extract customer_id from result
             # The result contains formatted text with customer details
-            # We'll extract customer_id from the text or structured content
+            # Format: "Customer ID: <uuid>"
             customer_id = None
             customer_info_text = ""
             
@@ -27,11 +27,18 @@ class AuthHandler:
             elif "structuredContent" in result:
                 customer_info_text = result["structuredContent"].get("result", "")
             
-            # Try to extract customer_id from text (format: "Customer ID: <uuid>" or similar)
-            uuid_pattern = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-            matches = re.findall(uuid_pattern, customer_info_text, re.IGNORECASE)
-            if matches:
-                customer_id = matches[0]
+            # Extract customer_id from text - look for "Customer ID: <uuid>" pattern
+            # The UUID appears after "Customer ID: " in the response
+            uuid_pattern = r'Customer ID:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
+            match = re.search(uuid_pattern, customer_info_text, re.IGNORECASE)
+            if match:
+                customer_id = match.group(1)
+            else:
+                # Fallback: try to find any UUID in the text
+                uuid_pattern_fallback = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                matches = re.findall(uuid_pattern_fallback, customer_info_text, re.IGNORECASE)
+                if matches:
+                    customer_id = matches[0]
             
             self.auth_state[session_id] = {
                 "email": email,

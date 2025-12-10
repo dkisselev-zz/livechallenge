@@ -11,6 +11,7 @@ class SupportAgent:
     """Customer support agent with MCP tool integration."""
     
     def __init__(self, mcp_client: MCPClient, auth_handler: AuthHandler):
+        # Initialize OpenAI client
         self.client = OpenAI(api_key=OPENAI_API_KEY)
         self.model = OPENAI_MODEL
         self.mcp_client = mcp_client
@@ -179,16 +180,31 @@ class SupportAgent:
     
     def process_message(self, session_id: str, user_message: str, conversation_history: List[Dict[str, str]]) -> str:
         """Process user message and return response."""
+        # Get authentication status
+        is_authenticated = self.auth_handler.is_authenticated(session_id)
+        customer_email = self.auth_handler.get_email(session_id) if is_authenticated else None
+        
         # Check if message is about authentication
         if "email" in user_message.lower() and "pin" in user_message.lower():
             # Try to extract email and PIN from message
             # This is a simple approach - in production, use structured input
             return "To authenticate, please provide your email and PIN in the format: 'email: your@email.com, pin: 1234'"
         
+        # Check if query might need authentication
+        order_keywords = ["order", "purchase", "buy", "my orders", "order history", "track order", "place order"]
+        needs_auth = any(keyword in user_message.lower() for keyword in order_keywords)
+        
+        if needs_auth and not is_authenticated:
+            return "To access your orders, I need to verify your identity. Please provide your email and PIN in this format: 'email: your@email.com, pin: 1234'"
+        
+        # Process with LLM (all API calls are automatically logged in OpenAI Platform under Logs → Completions)
+        response_text = self._process_with_llm(session_id, user_message, conversation_history, is_authenticated, customer_email)
+        return response_text
+    
+    def _process_with_llm(self, session_id: str, user_message: str, conversation_history: List[Dict[str, str]], is_authenticated: bool, customer_email: Optional[str]) -> str:
+        """Internal method to process message with LLM."""
         # Build system message with authentication status
-        is_authenticated = self.auth_handler.is_authenticated(session_id)
         auth_status = "authenticated" if is_authenticated else "not authenticated"
-        customer_email = self.auth_handler.get_email(session_id) if is_authenticated else None
         
         system_content = """You are a helpful customer support agent for a computer products company.
 You can help customers with:
@@ -200,9 +216,11 @@ Current session status: """ + auth_status
             system_content += f"\nAuthenticated customer: {customer_email}"
         system_content += """
 
-When a customer asks about orders and is not authenticated, ask them to provide their email and PIN.
-If the customer is already authenticated, you can directly help with their orders.
-Be friendly, professional, and helpful. Provide clear, concise answers."""
+IMPORTANT INSTRUCTIONS:
+- When a customer asks to see/list/show their orders, use the list_orders tool directly
+- When a customer asks about a specific order, use the get_order tool
+- The customer_id is already set for authenticated sessions - you don't need to provide it
+- Be friendly, professional, and helpful. Provide clear, concise answers."""
         
         messages = [
             {
@@ -217,15 +235,10 @@ Be friendly, professional, and helpful. Provide clear, concise answers."""
         # Add current user message
         messages.append({"role": "user", "content": user_message})
         
-        # Check if query might need authentication
-        order_keywords = ["order", "purchase", "buy", "my orders", "order history", "track order", "place order"]
-        needs_auth = any(keyword in user_message.lower() for keyword in order_keywords)
-        
-        if needs_auth and not self.auth_handler.is_authenticated(session_id):
-            return "To access your orders, I need to verify your identity. Please provide your email and PIN in this format: 'email: your@email.com, pin: 1234'"
-        
         try:
             # Call OpenAI with tool calling
+            # Note: For standard OpenAI Python SDK, API calls appear in Logs -> Completions
+            # The Traces tab is for OpenAI Agents SDK (JavaScript/TypeScript)
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -252,18 +265,24 @@ Be friendly, professional, and helpful. Provide clear, concise answers."""
                         })
                         continue
                     
-                    # Inject customer_id for order-related tools if not provided
+                    # Inject customer_id for order-related tools
                     if self._requires_auth(tool_name):
                         customer_id = self._get_customer_id(session_id)
                         if customer_id:
-                            # Add customer_id to tool args if not present and tool needs it
+                            # ALWAYS replace customer_id with the authenticated UUID
+                            # Don't trust what the LLM provides - it may provide email instead
                             if tool_name in ["list_orders", "get_customer", "create_order"]:
-                                if "customer_id" not in tool_args or not tool_args.get("customer_id"):
-                                    tool_args["customer_id"] = customer_id
-                        elif tool_name == "list_orders":
-                            # For list_orders, if no customer_id, we can still call it without filter
-                            # The MCP server will handle it
-                            pass
+                                tool_args["customer_id"] = customer_id
+                        else:
+                            # If customer_id is not available, don't call the tool
+                            # This prevents using email as customer_id
+                            tool_results.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": tool_name,
+                                "content": "Error: Customer ID not found. Please re-authenticate."
+                            })
+                            continue
                     
                     # Call MCP tool
                     try:
@@ -295,6 +314,7 @@ Be friendly, professional, and helpful. Provide clear, concise answers."""
                 messages.append(message)
                 messages.extend(tool_results)
                 
+                # Final response - automatically traced
                 final_response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages
@@ -303,7 +323,6 @@ Be friendly, professional, and helpful. Provide clear, concise answers."""
                 return final_response.choices[0].message.content
             else:
                 return message.content
-                
         except Exception as e:
             return f"I apologize, but I encountered an error: {str(e)}. Please try again."
 

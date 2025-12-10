@@ -16,5 +16,10 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://vipfapwm3x.us-east-1.awsap
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 
 # OpenAI Model
-OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_MODEL = "gpt-4.1-mini"
+
+# OpenAI Tracing Configuration
+# Set OPENAI_TRACING=true to enable tracing (default: enabled)
+# Tracing allows you to see detailed logs in OpenAI dashboard
+OPENAI_TRACING = os.getenv("OPENAI_TRACING", "true").lower() == "true"
 

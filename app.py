@@ -55,6 +55,7 @@ def chat_response(message, history, session_id):
     conv_history = memory.get_conversation_context(session_id)
     
     # Process message with agent
+    # All OpenAI API calls are automatically logged in OpenAI Platform under "Logs → Completions"
     response = agent.process_message(session_id, message, conv_history)
     
     # Update history - Gradio 6.x format
@@ -91,8 +92,9 @@ def create_interface():
         gr.Markdown("### Authentication")
         gr.Markdown("To authenticate, include in your message: `email: your@email.com, pin: 1234`")
         
-        # Session state
-        session_id = gr.State(value="default_session")
+        # Session state - generate unique ID for each user session
+        import uuid
+        session_id = gr.State(value=lambda: f"session_{uuid.uuid4().hex[:16]}")
         
         # Event handlers
         def submit_message(message, history, session):
